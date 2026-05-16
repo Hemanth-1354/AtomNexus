@@ -4,11 +4,13 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import GoalSetting from './pages/GoalSetting';
 import CheckIns from './pages/CheckIns';
+import Analytics from './pages/Analytics';
+import Reports from './pages/Reports';
 import Sidebar from './components/Sidebar';
 import axios from 'axios';
 
-// Set base URL for API
-axios.defaults.baseURL = 'http://localhost:5000';
+// Set base URL for API (handled by Vite proxy in development)
+// axios.defaults.baseURL = 'http://localhost:5000';
 
 const PrivateRoute = ({ children, user }) => {
   return user ? children : <Navigate to="/login" />;
@@ -80,6 +82,22 @@ function App() {
           <PrivateRoute user={user}>
             <AppLayout user={user} onLogout={handleLogout}>
               <CheckIns user={user} />
+            </AppLayout>
+          </PrivateRoute>
+        } />
+
+        <Route path="/analytics" element={
+          <PrivateRoute user={user}>
+            <AppLayout user={user} onLogout={handleLogout}>
+              <Analytics user={user} />
+            </AppLayout>
+          </PrivateRoute>
+        } />
+
+        <Route path="/reports" element={
+          <PrivateRoute user={user}>
+            <AppLayout user={user} onLogout={handleLogout}>
+              <Reports user={user} />
             </AppLayout>
           </PrivateRoute>
         } />

@@ -57,25 +57,10 @@ export default function CheckIns({ user }) {
     }
   };
 
-  const renderScore = (goal, actual) => {
-    if (!actual || actual === '') return '-';
-    let score = 0;
-    const a = parseFloat(actual);
-    const t = parseFloat(goal.target);
-    
-    if (isNaN(a) || isNaN(t)) return '-';
-
-    switch(goal.uom_type) {
-      case 'Numeric (Min)':
-      case 'Percentage':
-        score = (a / t) * 100; break;
-      case 'Numeric (Max)':
-        score = (t / a) * 100; break;
-      case 'Zero':
-        score = a === 0 ? 100 : 0; break;
-      default: return '-';
-    }
-    return score.toFixed(1) + '%';
+  const renderScore = (goalId) => {
+    const ci = checkIns[goalId];
+    if (!ci || ci.computed_score === undefined || ci.computed_score === null) return '-';
+    return ci.computed_score.toFixed(1) + '%';
   };
 
   return (
@@ -152,7 +137,7 @@ export default function CheckIns({ user }) {
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(59, 130, 246, 0.1)', padding: '12px', borderRadius: '8px' }}>
                       <span style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>Computed Score:</span>
-                      <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{renderScore(g, ci.actual_achievement)}</span>
+                      <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{renderScore(g.id)}</span>
                     </div>
                   </div>
 

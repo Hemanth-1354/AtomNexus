@@ -26,6 +26,19 @@ export default function Sidebar({ user, onLogout }) {
             <CheckSquare size={20} />
             Quarterly Check-ins
           </NavLink>
+
+          {(user.role === 'Admin' || user.role === 'Manager') && (
+            <>
+              <NavLink to="/analytics" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <Target size={20} />
+                Analytics
+              </NavLink>
+              <NavLink to="/reports" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                <LayoutDashboard size={20} />
+                Reports & Escalations
+              </NavLink>
+            </>
+          )}
         </nav>
       </div>
 

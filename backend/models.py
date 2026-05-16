@@ -28,6 +28,7 @@ class Goal(Base):
     target = Column(String)
     weightage = Column(Integer)
     is_shared = Column(Boolean, default=False)
+    parent_shared_goal_id = Column(Integer, ForeignKey("goals.id"), nullable=True)
     status = Column(String, default="Draft") # 'Draft', 'Pending_Approval', 'Approved', 'Returned'
     is_locked = Column(Boolean, default=False)
 
@@ -47,3 +48,17 @@ class CheckIn(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     goal = relationship("Goal", back_populates="check_ins")
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    goal_id = Column(Integer, ForeignKey("goals.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    action = Column(String) # 'Update Target', 'Update Weightage', 'Status Change', etc.
+    old_value = Column(String, nullable=True)
+    new_value = Column(String, nullable=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+    goal = relationship("Goal")
+    user = relationship("User")

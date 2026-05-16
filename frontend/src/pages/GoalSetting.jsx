@@ -60,7 +60,7 @@ export default function GoalSetting({ user }) {
       setDrafts([]);
       fetchGoals();
     } catch (err) {
-      setError(err.response?.data || 'Failed to submit goals.');
+      setError(err.response?.data?.detail || err.response?.data || 'Failed to submit goals.');
     }
   };
 
