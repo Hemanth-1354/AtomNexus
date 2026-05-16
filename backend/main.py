@@ -27,7 +27,12 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+@app.get("/")
+def health_check():
+    return {"status": "AtomQuest Backend is Running", "version": "1.0.0"}
+
 # CORS
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
