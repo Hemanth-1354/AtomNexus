@@ -41,40 +41,54 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def get_current_quarter() -> str:
+    """Returns the active check-in quarter based on BRD schedule."""
     month = datetime.datetime.now().month
-    if month in [1, 2, 3]: return 'Q4'
-    if month in [4, 5, 6]: return 'Q1'
-    if month in [7, 8, 9]: return 'Q2'
-    if month in [10, 11, 12]: return 'Q3'
-    return 'Q1'
+    # BRD: Q1 (July), Q2 (Oct), Q3 (Jan), Q4 (Mar/Apr), Phase 1 (May)
+    if month == 7: return 'Q1'
+    if month == 10: return 'Q2'
+    if month == 1: return 'Q3'
+    if month in [3, 4]: return 'Q4'
+    return 'GoalSetting' # Default for Phase 1 or closed periods
 
 def is_checkin_window_open(quarter: str) -> bool:
     current_q = get_current_quarter()
+    # During 'GoalSetting' phase (May), check-ins are closed.
+    if current_q == 'GoalSetting':
+        return False
     return quarter == current_q
 
 def compute_progress_score(target: str, actual: str, uom_type: str) -> float:
     try:
-        if not uom_type:
-            uom_type = 'min'
-            
         uom = uom_type.lower()
+        
+        # BRD: Timeline - Completion date vs. Deadline
         if 'timeline' in uom or 'date' in uom:
             try:
                 t_date = datetime.datetime.strptime(target, "%Y-%m-%d")
                 a_date = datetime.datetime.strptime(actual, "%Y-%m-%d")
                 return 100.0 if a_date <= t_date else 0.0
-            except ValueError:
+            except:
                 return 100.0 if actual <= target else 0.0
                 
+        # BRD: Zero - If 0 -> 100%, else 0%
+        if 'zero' in uom:
+            try:
+                a_val = float(actual)
+                return 100.0 if a_val == 0 else 0.0
+            except:
+                return 0.0
+
         t_val = float(target)
         a_val = float(actual)
         
-        if 'zero-based' in uom:
-            return max(0.0, 100.0 - (a_val / t_val * 100.0)) if t_val != 0 else 0.0
-        elif 'max' in uom or 'lower-is-better' in uom:
+        # BRD: Max (Numeric / %) - Lower is better
+        if 'max' in uom or 'lower' in uom:
             return min(100.0, (t_val / a_val) * 100.0) if a_val != 0 else 0.0
-        else: # min (higher is better)
+        
+        # BRD: Min (Numeric / %) - Higher is better
+        else:
             return min(100.0, (a_val / t_val) * 100.0) if t_val != 0 else 0.0
+            
     except (ValueError, TypeError):
         return 0.0
 
@@ -84,6 +98,13 @@ def send_email_notification(to_email: str, subject: str, body: str):
     print(f"SUBJECT: {subject}")
     print(f"BODY: {body}")
     print("----------------------------")
+
+def send_teams_notification(manager_name: str, employee_name: str, goal_count: int):
+    # Mocking Teams Adaptive Card
+    print(f"--- TEAMS NOTIFICATION TO: {manager_name} ---")
+    print(f"CARD: {employee_name} has submitted {goal_count} goals for your approval.")
+    print(f"ACTION: [Review Goals](http://localhost:5173/goals)")
+    print("------------------------------------------")
 
 # Dependency
 def get_db():
@@ -228,13 +249,18 @@ def create_goals(req: GoalsBulkCreate, current_user: models.User = Depends(get_c
     if current_user.role != 'Employee':
         raise HTTPException(status_code=403, detail="Only employees can create goals")
     
-    existing_goals_count = db.query(models.Goal).filter(models.Goal.user_id == current_user.id).count()
-    if existing_goals_count + len(req.goals) > 8:
-        raise HTTPException(status_code=400, detail=f"Maximum 8 goals allowed. You already have {existing_goals_count}.")
+    existing_goals = db.query(models.Goal).filter(models.Goal.user_id == current_user.id).all()
+    existing_count = len(existing_goals)
+    existing_weightage = sum([g.weightage for g in existing_goals])
     
-    total_weightage = sum([g.weightage for g in req.goals])
-    if total_weightage != 100:
-        raise HTTPException(status_code=400, detail="Total weightage must equal 100%")
+    new_count = len(req.goals)
+    new_weightage = sum([g.weightage for g in req.goals])
+
+    if existing_count + new_count > 8:
+        raise HTTPException(status_code=400, detail=f"Maximum 8 goals allowed. You have {existing_count} existing and are adding {new_count}.")
+    
+    if existing_weightage + new_weightage != 100:
+        raise HTTPException(status_code=400, detail=f"Total weightage must equal 100%. Current total: {existing_weightage + new_weightage}%")
     
     for g in req.goals:
         if g.weightage < 10:
@@ -255,6 +281,7 @@ def create_goals(req: GoalsBulkCreate, current_user: models.User = Depends(get_c
     db.commit()
     
     send_email_notification("manager@atomquest.com", "New Goals Submitted", f"{current_user.name} submitted {len(req.goals)} new goals for approval.")
+    send_teams_notification("Manager One", current_user.name, len(req.goals))
     return {"message": "Goals submitted successfully"}
 
 @app.put("/api/goals/{id}")
@@ -265,6 +292,10 @@ def update_goal(id: int, req: GoalUpdate, current_user: models.User = Depends(ge
     goal = db.query(models.Goal).filter(models.Goal.id == id).first()
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
+    
+    # BRD: On approval, goals are locked — no further edits without Admin intervention
+    if goal.is_locked and current_user.role != 'Admin':
+        raise HTTPException(status_code=403, detail="This goal is locked and can only be edited by an Admin.")
     
     def log_audit(action, old_val, new_val):
         if goal.is_locked:
@@ -337,7 +368,8 @@ def save_check_in(req: CheckInReq, current_user: models.User = Depends(get_curre
     db.commit()
     db.refresh(ci)
     
-    if goal.parent_shared_goal_id:
+    # BRD: Achievement updates by the primary owner sync across all linked goal sheets
+    if goal.parent_shared_goal_id and goal.id == goal.parent_shared_goal_id:
         linked_goals = db.query(models.Goal).filter(models.Goal.parent_shared_goal_id == goal.parent_shared_goal_id).all()
         for lg in linked_goals:
             if lg.id == goal.id: continue
@@ -501,14 +533,22 @@ def get_analytics_summary(current_user: models.User = Depends(get_current_user),
     if current_user.role not in ['Admin', 'Manager']:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    goals = db.query(models.Goal).all()
-    thrust_dist = {}
-    for g in goals:
-        thrust_dist[g.thrust_area] = thrust_dist.get(g.thrust_area, 0) + 1
+    # Manager Effectiveness
+    managers = db.query(models.User).filter(models.User.role == 'Manager').all()
+    manager_stats = []
+    for m in managers:
+        employees = db.query(models.User).filter(models.User.manager_id == m.id).all()
+        emp_ids = [e.id for e in employees]
+        total_goals = db.query(models.Goal).filter(models.Goal.user_id.in_(emp_ids)).count()
+        approved_goals = db.query(models.Goal).filter(models.Goal.user_id.in_(emp_ids), models.Goal.status == 'Approved').count()
         
+        completion_rate = (approved_goals / total_goals * 100) if total_goals > 0 else 0
+        manager_stats.append({"name": m.name, "completion": round(completion_rate, 1)})
+
     return {
         "total_goals": len(goals),
-        "thrust_area_distribution": thrust_dist
+        "thrust_area_distribution": thrust_dist,
+        "manager_effectiveness": manager_stats
     }
 
 @app.get("/api/admin/escalations")
@@ -519,16 +559,37 @@ def get_escalations(current_user: models.User = Depends(get_current_user), db: S
     employees = db.query(models.User).filter(models.User.role == 'Employee').all()
     escalations = []
     
+    # Rule 1: Employees with zero goals submitted
     for emp in employees:
         goal_count = db.query(models.Goal).filter(models.Goal.user_id == emp.id).count()
         if goal_count == 0:
-            escalations.append({"user_id": emp.id, "name": emp.name, "issue": "No goals submitted"})
+            escalations.append({"user_id": emp.id, "name": emp.name, "issue": "Zero Goals Submitted", "severity": "High"})
             
-    goals = db.query(models.Goal).filter(models.Goal.status == 'Pending_Approval').all()
-    for g in goals:
-        escalations.append({"goal_id": g.id, "user_id": g.user_id, "issue": "Pending approval"})
+    # Rule 2: Managers with Pending Approvals (Rule: Flag if goal is still 'Pending' after submission)
+    pending_goals = db.query(models.Goal).filter(models.Goal.status == 'Pending_Approval').all()
+    for g in pending_goals:
+        manager = db.query(models.User).filter(models.User.id == models.User.manager_id).first() # Simplified for mock
+        escalations.append({
+            "goal_id": g.id, 
+            "user_id": g.user_id, 
+            "issue": f"Approval Delayed by Manager", 
+            "severity": "Medium"
+        })
         
     return {"escalations": escalations}
+
+@app.post("/api/admin/escalate/{user_id}")
+def trigger_manual_escalation(user_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role != 'Admin':
+        raise HTTPException(status_code=403, detail="Only Admins can trigger manual escalations")
+    
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Mocking the escalation event
+    print(f"!!! MANUAL ESCALATION TRIGGERED FOR {user.name} by {current_user.name} !!!")
+    return {"message": f"Escalation notification sent for {user.name}"}
 
 if __name__ == "__main__":
     import uvicorn

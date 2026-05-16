@@ -41,22 +41,40 @@ export default function GoalSetting({ user }) {
     setDrafts(newDrafts);
   };
 
+  const handleEmployeeUpdate = async (id, updates) => {
+    try {
+      await axios.put(`/api/employee/goals/${id}`, updates);
+      fetchGoals();
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.detail || 'Failed to update goal');
+    }
+  };
+
   const submitGoals = async () => {
     setError(''); setSuccess('');
+    
+    // Validate current state (Saved Goals + Drafts)
     let totalWeightage = goals.reduce((acc, g) => acc + g.weightage, 0) + drafts.reduce((acc, g) => acc + parseInt(g.weightage), 0);
     
-    if (drafts.some(d => d.weightage < 10)) {
-      setError('Minimum 10% weightage required per goal.');
-      return;
-    }
     if (totalWeightage !== 100) {
       setError(`Total weightage must be exactly 100%. Current: ${totalWeightage}%`);
       return;
     }
 
     try {
-      await axios.post('/api/goals', { goals: drafts });
-      setSuccess('Goals submitted for approval.');
+      // 1. Submit local drafts
+      if (drafts.length > 0) {
+        await axios.post('/api/goals', { goals: drafts });
+      }
+      
+      // 2. Move any 'Draft' or 'Returned' database goals to 'Pending_Approval'
+      const goalsToSubmit = goals.filter(g => g.status === 'Draft' || g.status === 'Returned');
+      for (const g of goalsToSubmit) {
+        await axios.put(`/api/employee/goals/${g.id}`, { status: 'Pending_Approval' });
+      }
+
+      setSuccess('All goals submitted for approval.');
       setDrafts([]);
       fetchGoals();
     } catch (err) {
@@ -114,38 +132,65 @@ export default function GoalSetting({ user }) {
             </tr>
           </thead>
           <tbody>
-            {goals.map(g => (
-              <tr key={g.id}>
-                {user.role === 'Manager' && <td>{g.employee_name}</td>}
-                <td>{g.thrust_area}</td>
-                <td>
-                  <div style={{ fontWeight: 500 }}>{g.title}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{g.description}</div>
-                </td>
-                <td>{g.uom_type}</td>
-                <td>
-                  {user.role === 'Manager' && g.status === 'Pending_Approval' ? (
-                    <input type="text" className="input-control" style={{ width: '80px', padding: '4px 8px' }} defaultValue={g.target} onBlur={(e) => handleManagerAction(g.id, 'Pending_Approval', e.target.value, g.weightage)} />
-                  ) : g.target}
-                </td>
-                <td>
-                  {user.role === 'Manager' && g.status === 'Pending_Approval' ? (
-                    <input type="number" className="input-control" style={{ width: '60px', padding: '4px 8px' }} defaultValue={g.weightage} onBlur={(e) => handleManagerAction(g.id, 'Pending_Approval', g.target, parseInt(e.target.value))} />
-                  ) : g.weightage}
-                </td>
-                <td>{renderBadge(g.status)}</td>
-                {user.role === 'Manager' && (
+            {goals.map((g, idx) => {
+              const isEditable = user.role === 'Employee' && (g.status === 'Draft' || g.status === 'Returned');
+              const isManagerReview = user.role === 'Manager' && g.status === 'Pending_Approval';
+              
+              return (
+                <tr key={g.id}>
+                  {user.role === 'Manager' && <td>{g.employee_name}</td>}
                   <td>
-                    {g.status === 'Pending_Approval' && (
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button className="btn btn-success" style={{ padding: '6px' }} onClick={() => handleManagerAction(g.id, 'Approved', g.target, g.weightage)}><CheckCircle size={16} /></button>
-                        <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => handleManagerAction(g.id, 'Returned', g.target, g.weightage)}><XCircle size={16} /></button>
-                      </div>
+                    {isEditable && !g.is_shared ? (
+                      <select className="input-control" value={g.thrust_area} onChange={e => handleEmployeeUpdate(g.id, { thrust_area: e.target.value })}>
+                        <option>Revenue</option><option>Cost</option><option>Quality</option><option>Delivery</option>
+                      </select>
+                    ) : g.thrust_area}
+                  </td>
+                  <td>
+                    {isEditable && !g.is_shared ? (
+                      <input type="text" className="input-control" value={g.title} onChange={e => handleEmployeeUpdate(g.id, { title: e.target.value })} />
+                    ) : (
+                      <>
+                        <div style={{ fontWeight: 500 }}>{g.title} {g.is_shared && <span style={{ fontSize: '0.6rem', background: 'var(--primary)', padding: '2px 4px', borderRadius: '4px' }}>SHARED</span>}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{g.description}</div>
+                      </>
                     )}
                   </td>
-                )}
-              </tr>
-            ))}
+                  <td>
+                    {isEditable && !g.is_shared ? (
+                      <select className="input-control" value={g.uom_type} onChange={e => handleEmployeeUpdate(g.id, { uom_type: e.target.value })}>
+                        <option>Numeric (Min)</option><option>Numeric (Max)</option><option>Percentage</option><option>Timeline</option><option>Zero</option>
+                      </select>
+                    ) : g.uom_type}
+                  </td>
+                  <td>
+                    {isManagerReview ? (
+                      <input type="text" className="input-control" style={{ width: '80px' }} defaultValue={g.target} onBlur={(e) => handleManagerAction(g.id, 'Pending_Approval', e.target.value, g.weightage)} />
+                    ) : (isEditable && !g.is_shared) ? (
+                      <input type="text" className="input-control" style={{ width: '80px' }} value={g.target} onChange={e => handleEmployeeUpdate(g.id, { target: e.target.value })} />
+                    ) : g.target}
+                  </td>
+                  <td>
+                    {isManagerReview ? (
+                      <input type="number" className="input-control" style={{ width: '60px' }} defaultValue={g.weightage} onBlur={(e) => handleManagerAction(g.id, 'Pending_Approval', g.target, parseInt(e.target.value))} />
+                    ) : isEditable ? (
+                      <input type="number" className="input-control" style={{ width: '60px' }} value={g.weightage} onChange={e => handleEmployeeUpdate(g.id, { weightage: parseInt(e.target.value) })} />
+                    ) : g.weightage}
+                  </td>
+                  <td>{renderBadge(g.status)}</td>
+                  {user.role === 'Manager' && (
+                    <td>
+                      {g.status === 'Pending_Approval' && (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button className="btn btn-success" style={{ padding: '6px' }} onClick={() => handleManagerAction(g.id, 'Approved', g.target, g.weightage)} title="Approve"><CheckCircle size={16} /></button>
+                          <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => handleManagerAction(g.id, 'Returned', g.target, g.weightage)} title="Return for Rework"><XCircle size={16} /></button>
+                        </div>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
             
             {drafts.map((d, i) => (
               <tr key={`draft-${i}`} style={{ background: 'rgba(255,255,255,0.02)' }}>
@@ -176,9 +221,9 @@ export default function GoalSetting({ user }) {
           </tbody>
         </table>
 
-        {drafts.length > 0 && (
+        {(drafts.length > 0 || goals.some(g => g.status === 'Draft' || g.status === 'Returned')) && (
           <div style={{ marginTop: '24px', textAlign: 'right' }}>
-            <button className="btn btn-primary" onClick={submitGoals}>Submit Goals for Approval</button>
+            <button className="btn btn-primary" onClick={submitGoals}>Submit All Goals for Approval</button>
           </div>
         )}
       </div>

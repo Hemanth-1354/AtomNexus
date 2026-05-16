@@ -26,8 +26,12 @@ export default function Dashboard({ user }) {
           <h1>Welcome, {user.name}</h1>
           <p style={{ color: 'var(--text-muted)' }}>Here's an overview of the current goal cycle.</p>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div className="badge badge-approved" style={{ fontSize: '0.9rem', padding: '8px 16px' }}>Phase 1: Goal Setting Active</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.05)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--border-glass)' }}>
+            <div className="pulse" style={{ width: '8px', height: '8px', background: 'var(--success)', borderRadius: '50%' }}></div>
+            <span style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>SYSTEM LIVE</span>
+          </div>
+          <div className="badge badge-approved" style={{ fontSize: '0.8rem', padding: '6px 12px' }}>Goal Setting Active</div>
         </div>
       </header>
 

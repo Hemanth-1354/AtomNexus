@@ -94,7 +94,21 @@ export default function Reports({ user }) {
                 {escalations.map((esc, i) => (
                   <tr key={i}>
                     <td>{esc.name || `Goal ID: ${esc.goal_id}`}</td>
-                    <td><span className="badge badge-returned">{esc.issue}</span></td>
+                    <td style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="badge badge-returned">{esc.issue}</span>
+                      {esc.user_id && (
+                        <button 
+                          className="btn btn-secondary" 
+                          style={{ padding: '4px 8px', fontSize: '0.7rem' }}
+                          onClick={async () => {
+                            await axios.post(`/api/admin/escalate/${esc.user_id}`);
+                            alert('Escalation notification triggered!');
+                          }}
+                        >
+                          Trigger Alert
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {escalations.length === 0 && (
