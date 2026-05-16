@@ -110,10 +110,29 @@ def compute_progress_score(target: str, actual: str, uom_type: str) -> float:
         return 0.0
 
 def send_email_notification(to_email: str, subject: str, body: str):
-    # Mocking email delivery for hackathon
-    print(f"--- EMAIL TO: {to_email} ---")
+    # Professional HTML Template
+    html_content = f"""
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div style="background-color: #6366f1; padding: 24px; text-align: center; color: white;">
+            <h1 style="margin: 0; font-size: 24px;">AtomQuest</h1>
+            <p style="margin: 8px 0 0; opacity: 0.9;">Performance & Goal Management</p>
+        </div>
+        <div style="padding: 32px; color: #1e293b; line-height: 1.6;">
+            <h2 style="margin-top: 0; color: #1e293b;">{subject}</h2>
+            <p>{body}</p>
+            <div style="margin-top: 32px; text-align: center;">
+                <a href="https://atomnexus.onrender.com" style="background-color: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">View in Portal</a>
+            </div>
+        </div>
+        <div style="background-color: #f8fafc; padding: 16px; text-align: center; color: #64748b; font-size: 12px;">
+            &copy; 2026 AtomQuest Portal. All rights reserved.
+        </div>
+    </div>
+    """
+
+    # Mocking email delivery for logs
+    print(f"--- [HTML] EMAIL TO: {to_email} ---")
     print(f"SUBJECT: {subject}")
-    print(f"BODY: {body}")
     print("----------------------------")
     
     if RESEND_API_KEY:
@@ -122,11 +141,12 @@ def send_email_notification(to_email: str, subject: str, body: str):
                 "from": "AtomQuest <onboarding@resend.dev>",
                 "to": to_email,
                 "subject": subject,
-                "text": body
+                "html": html_content
             })
-            print(f"Email sent via Resend to {to_email}")
+            print(f"HTML Email sent via Resend to {to_email}")
         except Exception as e:
             print(f"Error sending email via Resend: {e}")
+
 
 
 def send_teams_notification(manager_name: str, employee_name: str, goal_count: int):
@@ -407,6 +427,12 @@ def update_goal(id: int, req: GoalUpdate, current_user: models.User = Depends(ge
             user = db.query(models.User).filter(models.User.id == goal.user_id).first()
             if user:
                 send_email_notification(user.email, "Goal Approved", f"Your goal '{goal.title}' has been approved.")
+        elif req.status == 'Returned':
+            user = db.query(models.User).filter(models.User.id == goal.user_id).first()
+            if user:
+                send_email_notification(user.email, "Goal Returned for Rework", f"Your manager has returned your goal '{goal.title}' for rework. Please check the feedback and resubmit.")
+
+
     if req.target is not None and req.target != goal.target:
         log_audit("Update Target", goal.target, req.target)
         goal.target = req.target
@@ -539,10 +565,20 @@ def employee_update_goal(id: int, req: EmployeeGoalUpdate, current_user: models.
         if req.uom_type: goal.uom_type = req.uom_type
         if req.target: goal.target = req.target
         if req.weightage is not None: goal.weightage = req.weightage
-        if req.status: goal.status = req.status
+        if req.status: 
+            goal.status = req.status
+            if req.status == 'Pending_Approval':
+                # Notify manager about resubmission
+                manager_email = "gunturkaaram279@gmail.com" # Fallback
+                if current_user.manager_id:
+                    mgr = db.query(models.User).filter(models.User.id == current_user.manager_id).first()
+                    if mgr: manager_email = mgr.email
+                
+                send_email_notification(manager_email, "Goal Resubmitted", f"{current_user.name} has updated and resubmitted the goal: '{goal.title}' for your review.")
         
     db.commit()
     return {"success": True}
+
 
 @app.get("/api/reports/achievement")
 def export_achievement_report(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):

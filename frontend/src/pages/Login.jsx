@@ -133,10 +133,10 @@ export default function Login({ onLogin }) {
 
         {view === 'login' && (
           <div style={{ marginTop: '24px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            <p>Test Accounts (All use your Resend email):</p>
-            <p>Email: gunturkaaram279@gmail.com</p>
-            <p>Password: password123</p>
-            <p style={{ fontSize: '0.7rem', marginTop: '8px' }}>* Log in with this email to see actual inbox delivery.</p>
+            <p>Test Accounts (pw: password123):</p>
+            <p>Employee: vikramnani69@gmail.com</p>
+            <p>Manager: gunturkaaram279@gmail.com</p>
+            <p>Admin: temporarymailhk@gmail.com</p>
           </div>
         )}
       </div>
