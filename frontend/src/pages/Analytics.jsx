@@ -116,23 +116,25 @@ export default function Analytics({ user }) {
       <div className="glass-panel" style={{ marginTop: '32px' }}>
         <h3 style={{ marginBottom: '24px' }}>Departmental Completion Heatmap</h3>
         <div className="grid-4" style={{ gap: '16px' }}>
-          {[
-            { dept: 'Engineering', rate: 92, color: '#10b981' },
-            { dept: 'Sales', rate: 75, color: '#f59e0b' },
-            { dept: 'Marketing', rate: 45, color: '#ef4444' },
-            { dept: 'HR', rate: 100, color: '#6366f1' }
-          ].map(d => (
-            <div key={d.dept} style={{ 
-              padding: '20px', 
-              borderRadius: '12px', 
-              background: `linear-gradient(135deg, ${d.color}22, ${d.color}11)`,
-              border: `1px solid ${d.color}44`,
-              textAlign: 'center'
-            }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px' }}>{d.dept}</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: d.color }}>{d.rate}%</div>
-            </div>
-          ))}
+          {(data.departmental_stats || []).map((d, i) => {
+            const colors = ['#6366f1', '#10b981', '#f59e0b', '#ef4444'];
+            const color = colors[i % colors.length];
+            return (
+              <div key={d.dept} style={{ 
+                padding: '20px', 
+                borderRadius: '12px', 
+                background: `linear-gradient(135deg, ${color}22, ${color}11)`,
+                border: `1px solid ${color}44`,
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px' }}>{d.dept}</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: color }}>{d.rate}%</div>
+              </div>
+            );
+          })}
+          {(!data.departmental_stats || data.departmental_stats.length === 0) && (
+            <div style={{ colSpan: 4, textAlign: 'center', color: 'var(--text-muted)' }}>No departmental data available.</div>
+          )}
         </div>
       </div>
     </div>

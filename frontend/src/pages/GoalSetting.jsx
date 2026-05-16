@@ -221,7 +221,7 @@ export default function GoalSetting({ user }) {
           </tbody>
         </table>
 
-        {(drafts.length > 0 || goals.some(g => g.status === 'Draft' || g.status === 'Returned')) && (
+        {user.role === 'Employee' && (drafts.length > 0 || goals.some(g => g.status === 'Draft' || g.status === 'Returned')) && (
           <div style={{ marginTop: '24px', textAlign: 'right' }}>
             <button className="btn btn-primary" onClick={submitGoals}>Submit All Goals for Approval</button>
           </div>

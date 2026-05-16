@@ -12,10 +12,13 @@ import bcrypt
 import io
 import csv
 
+from database import engine, SessionLocal, Base
 import models
-from database import engine, SessionLocal
 
-models.Base.metadata.create_all(bind=engine)
+# Ensure all models are imported before calling create_all
+from models import User, Goal, CheckIn, AuditLog
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
@@ -51,11 +54,10 @@ def get_current_quarter() -> str:
     return 'GoalSetting' # Default for Phase 1 or closed periods
 
 def is_checkin_window_open(quarter: str) -> bool:
-    current_q = get_current_quarter()
-    # During 'GoalSetting' phase (May), check-ins are closed.
-    if current_q == 'GoalSetting':
-        return False
-    return quarter == current_q
+    # current_q = get_current_quarter()
+    # During 'GoalSetting' phase (May), check-ins are closed in real business rules.
+    # For hackathon/demo purposes, we allow all check-ins.
+    return True
 
 def compute_progress_score(target: str, actual: str, uom_type: str) -> float:
     try:
@@ -545,10 +547,36 @@ def get_analytics_summary(current_user: models.User = Depends(get_current_user),
         completion_rate = (approved_goals / total_goals * 100) if total_goals > 0 else 0
         manager_stats.append({"name": m.name, "completion": round(completion_rate, 1)})
 
+    # Thrust Area Distribution
+    all_goals = db.query(models.Goal).all()
+    thrust_dist = {}
+    for g in all_goals:
+        thrust_dist[g.thrust_area] = thrust_dist.get(g.thrust_area, 0) + 1
+
+    # Departmental Stats
+    departments = db.query(models.User.department).distinct().all()
+    dept_stats = []
+    for (dept,) in departments:
+        if not dept: continue
+        dept_users = db.query(models.User).filter(models.User.department == dept, models.User.role == 'Employee').all()
+        if not dept_users: continue
+        
+        emp_ids = [u.id for u in dept_users]
+        total_dept_goals = db.query(models.Goal).filter(models.Goal.user_id.in_(emp_ids)).count()
+        if total_dept_goals == 0:
+            rate = 0
+        else:
+            # Simple completion rate: Approved goals vs total goals
+            approved_dept_goals = db.query(models.Goal).filter(models.Goal.user_id.in_(emp_ids), models.Goal.status == 'Approved').count()
+            rate = round((approved_dept_goals / total_dept_goals) * 100)
+        
+        dept_stats.append({"dept": dept, "rate": rate})
+
     return {
-        "total_goals": len(goals),
+        "total_goals": len(all_goals),
         "thrust_area_distribution": thrust_dist,
-        "manager_effectiveness": manager_stats
+        "manager_effectiveness": manager_stats,
+        "departmental_stats": dept_stats
     }
 
 @app.get("/api/admin/escalations")
@@ -568,11 +596,18 @@ def get_escalations(current_user: models.User = Depends(get_current_user), db: S
     # Rule 2: Managers with Pending Approvals (Rule: Flag if goal is still 'Pending' after submission)
     pending_goals = db.query(models.Goal).filter(models.Goal.status == 'Pending_Approval').all()
     for g in pending_goals:
-        manager = db.query(models.User).filter(models.User.id == models.User.manager_id).first() # Simplified for mock
+        user = db.query(models.User).filter(models.User.id == g.user_id).first()
+        manager_name = "Unknown Manager"
+        if user and user.manager_id:
+            manager = db.query(models.User).filter(models.User.id == user.manager_id).first()
+            if manager: manager_name = manager.name
+            
         escalations.append({
             "goal_id": g.id, 
             "user_id": g.user_id, 
-            "issue": f"Approval Delayed by Manager", 
+            "employee_name": user.name if user else "Unknown",
+            "manager_name": manager_name,
+            "issue": f"Approval Delayed", 
             "severity": "Medium"
         })
         
