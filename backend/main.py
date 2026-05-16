@@ -11,9 +11,14 @@ import datetime
 import bcrypt
 import io
 import csv
+import random
+import string
+import resend
 
 from database import engine, SessionLocal, Base
 import models
+from dotenv import load_dotenv
+load_dotenv()
 
 # Ensure all models are imported before calling create_all
 from models import User, Goal, CheckIn, AuditLog
@@ -25,7 +30,7 @@ app = FastAPI()
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,6 +39,11 @@ app.add_middleware(
 # TODO: WARNING: Change this secret key in production!
 SECRET_KEY = os.environ.get("JWT_SECRET", "hackathon123")
 ALGORITHM = "HS256"
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
 
 def get_password_hash(password: str) -> str:
     salt = bcrypt.gensalt()
@@ -100,6 +110,19 @@ def send_email_notification(to_email: str, subject: str, body: str):
     print(f"SUBJECT: {subject}")
     print(f"BODY: {body}")
     print("----------------------------")
+    
+    if RESEND_API_KEY:
+        try:
+            resend.Emails.send({
+                "from": "AtomQuest <onboarding@resend.dev>",
+                "to": to_email,
+                "subject": subject,
+                "text": body
+            })
+            print(f"Email sent via Resend to {to_email}")
+        except Exception as e:
+            print(f"Error sending email via Resend: {e}")
+
 
 def send_teams_notification(manager_name: str, employee_name: str, goal_count: int):
     # Mocking Teams Adaptive Card
@@ -121,16 +144,18 @@ def seed_db():
     db = SessionLocal()
     if not db.query(models.User).first():
         hashed_password = get_password_hash("password123")
-        admin = models.User(name="Admin User", email="admin@atomquest.com", password=hashed_password, role="Admin", department="HR")
+        admin = models.User(name="Admin User", email="temporarymailhk@gmail.com", password=hashed_password, role="Admin", department="HR")
         db.add(admin)
         db.commit()
 
-        manager = models.User(name="Manager One", email="manager1@atomquest.com", password=hashed_password, role="Manager", department="Engineering")
+        manager = models.User(name="Manager One", email="gunturkaaram279@gmail.com", password=hashed_password, role="Manager", department="Engineering")
         db.add(manager)
         db.commit()
 
-        emp1 = models.User(name="Emp One", email="emp1@atomquest.com", password=hashed_password, role="Employee", manager_id=manager.id, department="Engineering")
-        emp2 = models.User(name="Emp Two", email="emp2@atomquest.com", password=hashed_password, role="Employee", manager_id=manager.id, department="Engineering")
+        emp1 = models.User(name="Emp One", email="vikramnani69@gmail.com", password=hashed_password, role="Employee", manager_id=manager.id, department="Engineering")
+
+        emp2 = models.User(name="Emp Two", email="emp2@gmail.com", password=hashed_password, role="Employee", manager_id=manager.id, department="Engineering")
+
         db.add_all([emp1, emp2])
         db.commit()
     db.close()
@@ -141,6 +166,15 @@ seed_db()
 class LoginReq(BaseModel):
     email: str
     password: str
+
+class ForgotPasswordReq(BaseModel):
+    email: str
+
+class ResetPasswordReq(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
 
 class GoalCreate(BaseModel):
     title: str
@@ -216,6 +250,53 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     )
     return {"token": token, "user": {"id": user.id, "name": user.name, "role": user.role, "email": user.email}}
 
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(req: ForgotPasswordReq, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == req.email).first()
+    if not user:
+        # Don't reveal if user exists, but don't send mail
+        return {"message": "If your email is in our system, you will receive a code."}
+    
+    # Generate 6-digit code
+    code = ''.join(random.choices(string.digits, k=6))
+    expiry = datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
+    
+    # Store code
+    db.query(models.PasswordReset).filter(models.PasswordReset.email == req.email).delete()
+    reset_entry = models.PasswordReset(email=req.email, code=code, expires_at=expiry)
+    db.add(reset_entry)
+    db.commit()
+    
+    # Send email
+    send_email_notification(
+        req.email, 
+        "Password Reset Code", 
+        f"Your verification code for AtomQuest is: {code}. It will expire in 10 minutes."
+    )
+    return {"message": "Verification code sent."}
+
+@app.post("/api/auth/reset-password")
+def reset_password(req: ResetPasswordReq, db: Session = Depends(get_db)):
+    reset_entry = db.query(models.PasswordReset).filter(
+        models.PasswordReset.email == req.email,
+        models.PasswordReset.code == req.code
+    ).first()
+    
+    if not reset_entry or reset_entry.expires_at < datetime.datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    
+    user = db.query(models.User).filter(models.User.email == req.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    
+    user.password = get_password_hash(req.new_password)
+    db.delete(reset_entry)
+    db.commit()
+    
+    return {"message": "Password updated successfully."}
+
+
 @app.get("/api/goals")
 def get_goals(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role == 'Employee':
@@ -282,7 +363,13 @@ def create_goals(req: GoalsBulkCreate, current_user: models.User = Depends(get_c
         db.add(new_goal)
     db.commit()
     
-    send_email_notification("manager@atomquest.com", "New Goals Submitted", f"{current_user.name} submitted {len(req.goals)} new goals for approval.")
+    # Find manager email
+    manager_email = "gunturkaaram279@gmail.com" # Fallback
+    if current_user.manager_id:
+        manager = db.query(models.User).filter(models.User.id == current_user.manager_id).first()
+        if manager: manager_email = manager.email
+
+    send_email_notification(manager_email, "New Goals Submitted", f"{current_user.name} submitted {len(req.goals)} new goals for approval.")
     send_teams_notification("Manager One", current_user.name, len(req.goals))
     return {"message": "Goals submitted successfully"}
 
@@ -628,4 +715,7 @@ def trigger_manual_escalation(user_id: int, current_user: models.User = Depends(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+    # Use the PORT environment variable if it exists (for deployment), otherwise default to 5000
+    port = int(os.environ.get("PORT", 5000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+
