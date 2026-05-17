@@ -6,10 +6,11 @@ export default function Reports({ user }) {
   const [escalations, setEscalations] = useState([]);
   const [completion, setCompletion] = useState(null);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [selectedQuarter, setSelectedQuarter] = useState('Q1');
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [selectedQuarter]);
 
   const fetchData = async () => {
     try {
@@ -21,7 +22,7 @@ export default function Reports({ user }) {
         setAuditLogs(auditRes.data || []);
       }
       
-      const compRes = await axios.get('/api/reports/completion');
+      const compRes = await axios.get(`/api/reports/completion?quarter=${selectedQuarter}`);
       setCompletion(compRes.data);
     } catch (err) {
       console.error(err);
@@ -53,9 +54,22 @@ export default function Reports({ user }) {
           <h1>Reports & Escalations</h1>
           <p style={{ color: 'var(--text-muted)' }}>Organization-wide compliance tracking.</p>
         </div>
-        <button className="btn btn-primary" onClick={downloadAchievementReport}>
-          <Download size={18} /> Download Achievement Report (CSV)
-        </button>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <select 
+            className="input-control" 
+            style={{ width: '150px', background: 'var(--bg-darker)', border: '1px solid var(--sidebar-border)', color: 'var(--text-main)', padding: '8px 12px', borderRadius: '8px' }} 
+            value={selectedQuarter} 
+            onChange={e => setSelectedQuarter(e.target.value)}
+          >
+            <option value="Q1">Q1 Cycle</option>
+            <option value="Q2">Q2 Cycle</option>
+            <option value="Q3">Q3 Cycle</option>
+            <option value="Q4">Q4 Cycle</option>
+          </select>
+          <button className="btn btn-primary" onClick={downloadAchievementReport}>
+            <Download size={18} /> Download Achievement Report (CSV)
+          </button>
+        </div>
       </header>
 
       {completion && (
@@ -83,64 +97,68 @@ export default function Reports({ user }) {
         <div className="grid-2" style={{ gap: '24px' }}>
           <div className="glass-panel">
             <h3 style={{ marginBottom: '16px', color: 'var(--danger)' }}>Active Escalations</h3>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Employee / Goal ID</th>
-                  <th>Issue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {escalations.map((esc, i) => (
-                  <tr key={i}>
-                    <td>{esc.name || `Goal ID: ${esc.goal_id}`}</td>
-                    <td style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="badge badge-returned">{esc.issue}</span>
-                      {esc.user_id && (
-                        <button 
-                          className="btn btn-secondary" 
-                          style={{ padding: '4px 8px', fontSize: '0.7rem' }}
-                          onClick={async () => {
-                            await axios.post(`/api/admin/escalate/${esc.user_id}`);
-                            alert('Escalation notification triggered!');
-                          }}
-                        >
-                          Trigger Alert
-                        </button>
-                      )}
-                    </td>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Employee / Goal ID</th>
+                    <th>Issue</th>
                   </tr>
-                ))}
-                {escalations.length === 0 && (
-                  <tr><td colSpan="2" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No escalations at this time.</td></tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {escalations.map((esc, i) => (
+                    <tr key={i}>
+                      <td>{esc.name || `Goal ID: ${esc.goal_id}`}</td>
+                      <td style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="badge badge-returned">{esc.issue}</span>
+                        {esc.user_id && (
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '4px 8px', fontSize: '0.7rem' }}
+                            onClick={async () => {
+                              await axios.post(`/api/admin/escalate/${esc.user_id}`);
+                              alert('Escalation notification triggered!');
+                            }}
+                          >
+                            Trigger Alert
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {escalations.length === 0 && (
+                    <tr><td colSpan="2" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No escalations at this time.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div className="glass-panel" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          <div className="glass-panel" style={{ maxHeight: '420px', display: 'flex', flexDirection: 'column' }}>
             <h3 style={{ marginBottom: '16px' }}>Recent Audit Logs</h3>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Goal ID</th>
-                  <th>Action</th>
-                  <th>Change</th>
-                </tr>
-              </thead>
-              <tbody>
-                {auditLogs.slice().reverse().map(log => (
-                  <tr key={log.id}>
-                    <td>{log.goal_id}</td>
-                    <td>{log.action}</td>
-                    <td>{log.old_value} &rarr; {log.new_value}</td>
+            <div className="data-table-wrapper" style={{ overflowY: 'auto', flex: 1, maxHeight: '330px' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Goal ID</th>
+                    <th>Action</th>
+                    <th>Change</th>
                   </tr>
-                ))}
-                {auditLogs.length === 0 && (
-                  <tr><td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No audit logs.</td></tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {auditLogs.slice().reverse().map(log => (
+                    <tr key={log.id}>
+                      <td>{log.goal_id}</td>
+                      <td>{log.action}</td>
+                      <td>{log.old_value} &rarr; {log.new_value}</td>
+                    </tr>
+                  ))}
+                  {auditLogs.length === 0 && (
+                    <tr><td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No audit logs.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

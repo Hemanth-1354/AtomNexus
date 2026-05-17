@@ -211,11 +211,13 @@ class GoalCreate(BaseModel):
 
 class GoalsBulkCreate(BaseModel):
     goals: List[GoalCreate]
+    status: Optional[str] = 'Pending_Approval'
 
 class GoalUpdate(BaseModel):
     status: Optional[str] = None
     target: Optional[str] = None
     weightage: Optional[int] = None
+    is_locked: Optional[bool] = None
 
 class CheckInReq(BaseModel):
     goal_id: int
@@ -367,12 +369,14 @@ def create_goals(req: GoalsBulkCreate, current_user: models.User = Depends(get_c
     if existing_count + new_count > 8:
         raise HTTPException(status_code=400, detail=f"Maximum 8 goals allowed. You have {existing_count} existing and are adding {new_count}.")
     
-    if existing_weightage + new_weightage != 100:
-        raise HTTPException(status_code=400, detail=f"Total weightage must equal 100%. Current total: {existing_weightage + new_weightage}%")
-    
-    for g in req.goals:
-        if g.weightage < 10:
-            raise HTTPException(status_code=400, detail="Minimum 10% weightage per goal required")
+    # If the employee is submitting directly for approval, enforce strict rules
+    if req.status == 'Pending_Approval':
+        if existing_weightage + new_weightage != 100:
+            raise HTTPException(status_code=400, detail=f"Total weightage must equal 100%. Current total: {existing_weightage + new_weightage}%")
+        
+        for g in req.goals:
+            if g.weightage < 10:
+                raise HTTPException(status_code=400, detail="Minimum 10% weightage per goal required")
     
     for g in req.goals:
         new_goal = models.Goal(
@@ -383,20 +387,22 @@ def create_goals(req: GoalsBulkCreate, current_user: models.User = Depends(get_c
             uom_type=g.uom_type,
             target=g.target,
             weightage=g.weightage,
-            status='Pending_Approval'
+            status=req.status
         )
         db.add(new_goal)
     db.commit()
     
-    # Find manager email
-    manager_email = "gunturkaaram279@gmail.com" # Fallback
-    if current_user.manager_id:
-        manager = db.query(models.User).filter(models.User.id == current_user.manager_id).first()
-        if manager: manager_email = manager.email
+    if req.status == 'Pending_Approval':
+        # Find manager email
+        manager_email = "gunturkaaram279@gmail.com" # Fallback
+        if current_user.manager_id:
+            manager = db.query(models.User).filter(models.User.id == current_user.manager_id).first()
+            if manager: manager_email = manager.email
 
-    send_email_notification(manager_email, "New Goals Submitted", f"{current_user.name} submitted {len(req.goals)} new goals for approval.")
-    send_teams_notification("Manager One", current_user.name, len(req.goals))
-    return {"message": "Goals submitted successfully"}
+        send_email_notification(manager_email, "New Goals Submitted", f"{current_user.name} submitted {len(req.goals)} new goals for approval.")
+        send_teams_notification("Manager One", current_user.name, len(req.goals))
+        
+    return {"message": "Goals saved as Draft successfully" if req.status == 'Draft' else "Goals submitted successfully"}
 
 @app.put("/api/goals/{id}")
 def update_goal(id: int, req: GoalUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -419,7 +425,28 @@ def update_goal(id: int, req: GoalUpdate, current_user: models.User = Depends(ge
             )
             db.add(audit)
 
+    # Validate weightage limits if updated
+    if req.weightage is not None:
+        if req.weightage < 10:
+            raise HTTPException(status_code=400, detail="Minimum 10% weightage per individual goal is required.")
+
+    if req.is_locked is not None:
+        if current_user.role != 'Admin':
+            raise HTTPException(status_code=403, detail="Only Admins can lock/unlock goals")
+        log_audit("Lock Status Change", goal.is_locked, req.is_locked)
+        goal.is_locked = req.is_locked
+
     if req.status and req.status != goal.status:
+        # Enforce 100% weightage check on approval
+        if req.status == 'Approved':
+            all_emp_goals = db.query(models.Goal).filter(models.Goal.user_id == goal.user_id).all()
+            total_w = 0
+            for g in all_emp_goals:
+                w = req.weightage if g.id == goal.id and req.weightage is not None else g.weightage
+                total_w += w
+            if total_w != 100:
+                raise HTTPException(status_code=400, detail=f"Cannot approve goal. Total weightage for employee goals is {total_w}%, but must be exactly 100%. Please adjust weightages first.")
+
         log_audit("Status Change", goal.status, req.status)
         goal.status = req.status
         if req.status == 'Approved':
@@ -430,8 +457,7 @@ def update_goal(id: int, req: GoalUpdate, current_user: models.User = Depends(ge
         elif req.status == 'Returned':
             user = db.query(models.User).filter(models.User.id == goal.user_id).first()
             if user:
-                send_email_notification(user.email, "Goal Returned for Rework", f"Your manager has returned your goal '{goal.title}' for rework. Please check the feedback and resubmit.")
-
+                send_email_notification(user.email, "Goal Returned for Rework", f"Your manager has returned your goal '{goal.title}' for rework. Please check feedback and resubmit.")
 
     if req.target is not None and req.target != goal.target:
         log_audit("Update Target", goal.target, req.target)
@@ -513,6 +539,15 @@ def create_shared_goal(req: SharedGoalCreate, current_user: models.User = Depend
     if current_user.role not in ['Admin', 'Manager']:
         raise HTTPException(status_code=403, detail="Only Admins and Managers can create shared goals")
     
+    # 1. Enforce max 8 goals limit for all recipients first
+    for emp_id in req.employee_ids:
+        emp = db.query(models.User).filter(models.User.id == emp_id).first()
+        if not emp:
+            raise HTTPException(status_code=404, detail=f"Employee with ID {emp_id} not found.")
+        existing_count = db.query(models.Goal).filter(models.Goal.user_id == emp_id).count()
+        if existing_count >= 8:
+            raise HTTPException(status_code=400, detail=f"Employee '{emp.name}' already has {existing_count} goals. Cannot push shared goal (max 8 goals allowed).")
+            
     first_goal = None
     for idx, emp_id in enumerate(req.employee_ids):
         new_goal = models.Goal(
@@ -524,8 +559,21 @@ def create_shared_goal(req: SharedGoalCreate, current_user: models.User = Depend
             target=req.target,
             weightage=req.weightage,
             is_shared=True,
-            status='Pending_Approval'
+            status='Draft' # Pushed as Draft so recipients can adjust weightage pre-submission
         )
+        # After creating the shared goal for an employee, send an email notification
+        if RESEND_API_KEY:
+            try:
+                employee = db.query(models.User).filter(models.User.id == emp_id).first()
+                if employee:
+                    send_email_notification(
+                        employee.email,
+                        "New Shared Goal Assigned",
+                        f"A new shared goal '{req.title}' has been assigned to you. Please review and adjust weightage as needed."
+                    )
+            except Exception as e:
+                print(f"Error sending shared goal email to {employee.email}: {e}")
+        # End of email notification block
         db.add(new_goal)
         db.commit()
         db.refresh(new_goal)
@@ -537,7 +585,7 @@ def create_shared_goal(req: SharedGoalCreate, current_user: models.User = Depend
             new_goal.parent_shared_goal_id = first_goal.id
         db.commit()
         
-    return {"message": "Shared goals distributed successfully"}
+    return {"message": "Shared goals distributed successfully in Draft status"}
 
 @app.put("/api/employee/goals/{id}")
 def employee_update_goal(id: int, req: EmployeeGoalUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -551,6 +599,19 @@ def employee_update_goal(id: int, req: EmployeeGoalUpdate, current_user: models.
     if goal.status not in ['Draft', 'Returned']:
         raise HTTPException(status_code=400, detail="Can only edit Draft or Returned goals")
     
+    # Validation check when status changes to Pending_Approval
+    if req.status == 'Pending_Approval':
+        # Sum of all goals weightage (including current updates)
+        all_goals = db.query(models.Goal).filter(models.Goal.user_id == current_user.id).all()
+        total_w = 0
+        for g in all_goals:
+            w = req.weightage if g.id == goal.id and req.weightage is not None else g.weightage
+            total_w += w
+            if w < 10:
+                raise HTTPException(status_code=400, detail=f"Goal '{g.title}' has weightage {w}%, but minimum 10% per individual goal is required.")
+        if total_w != 100:
+            raise HTTPException(status_code=400, detail=f"Total weightage must equal exactly 100%. Current total: {total_w}%")
+
     if goal.is_shared:
         if req.title or req.description or req.target or req.thrust_area or req.uom_type:
             raise HTTPException(status_code=400, detail="Cannot edit core fields of a shared goal")
@@ -605,10 +666,15 @@ def export_achievement_report(current_user: models.User = Depends(get_current_us
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=achievement_report.csv"})
 
 @app.get("/api/reports/completion")
-def get_completion_dashboard(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_completion_dashboard(quarter: Optional[str] = None, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role not in ['Admin', 'Manager']:
         raise HTTPException(status_code=403, detail="Not authorized")
     
+    if not quarter:
+        quarter = get_current_quarter()
+        if quarter == 'GoalSetting':
+            quarter = 'Q1' # Graceful fallback for demo/dashboard testing in May
+            
     users_query = db.query(models.User).filter(models.User.role == 'Employee')
     if current_user.role == 'Manager':
         users_query = users_query.filter(models.User.manager_id == current_user.id)
@@ -628,8 +694,7 @@ def get_completion_dashboard(current_user: models.User = Depends(get_current_use
             stats.append({"employee_id": emp.id, "employee_name": emp.name, "status": "Goals Not Approved"})
             continue
             
-        current_q = get_current_quarter()
-        check_ins = db.query(models.CheckIn).join(models.Goal).filter(models.Goal.user_id == emp.id, models.CheckIn.quarter == current_q).all()
+        check_ins = db.query(models.CheckIn).join(models.Goal).filter(models.Goal.user_id == emp.id, models.CheckIn.quarter == quarter).all()
         
         if len(check_ins) < total_goals:
             stats.append({"employee_id": emp.id, "employee_name": emp.name, "status": "Check-in Pending"})
@@ -637,6 +702,7 @@ def get_completion_dashboard(current_user: models.User = Depends(get_current_use
             stats.append({"employee_id": emp.id, "employee_name": emp.name, "status": "Check-in Completed"})
             
     summary = {
+        "active_quarter": quarter,
         "total_employees": len(stats),
         "no_goals": sum(1 for s in stats if s['status'] == 'No Goals Set'),
         "goals_not_approved": sum(1 for s in stats if s['status'] == 'Goals Not Approved'),
@@ -741,6 +807,15 @@ def get_escalations(current_user: models.User = Depends(get_current_user), db: S
         
     return {"escalations": escalations}
 
+@app.get("/api/employees")
+def get_reporting_employees(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.role == 'Admin':
+        return db.query(models.User).filter(models.User.role == 'Employee').all()
+    elif current_user.role == 'Manager':
+        return db.query(models.User).filter(models.User.manager_id == current_user.id).all()
+    else:
+        raise HTTPException(status_code=403, detail="Only Admins and Managers can retrieve employee lists")
+
 @app.post("/api/admin/escalate/{user_id}")
 def trigger_manual_escalation(user_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role != 'Admin':
@@ -750,9 +825,38 @@ def trigger_manual_escalation(user_id: int, current_user: models.User = Depends(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # Mocking the escalation event
     print(f"!!! MANUAL ESCALATION TRIGGERED FOR {user.name} by {current_user.name} !!!")
-    return {"message": f"Escalation notification sent for {user.name}"}
+    
+    # 1. Notify Employee via email
+    emp_subject = "URGENT: Goal/Check-in Compliance Escalation"
+    emp_body = (
+        f"Dear {user.name},\n\n"
+        f"An administrative escalation has been triggered for your account regarding pending compliance items "
+        f"(either zero goals submitted or delayed quarterly check-ins).\n\n"
+        f"Please log in to AtomQuest and update your goals or check-ins as soon as possible.\n\n"
+        f"Best regards,\n"
+        f"HR & Compliance Team\n"
+        f"AtomQuest Portal"
+    )
+    send_email_notification(user.email, emp_subject, emp_body)
+    
+    # 2. Notify Manager (if applicable)
+    if user.manager_id:
+        mgr = db.query(models.User).filter(models.User.id == user.manager_id).first()
+        if mgr:
+            mgr_subject = f"Escalation Alert: Goal compliance for {user.name}"
+            mgr_body = (
+                f"Dear {mgr.name},\n\n"
+                f"This is an escalation notice for your direct report, {user.name}.\n\n"
+                f"An administrative escalation has been triggered due to pending goals/check-in submission. "
+                f"Please coordinate with them to ensure immediate resolution.\n\n"
+                f"Best regards,\n"
+                f"HR & Compliance Team\n"
+                f"AtomQuest Portal"
+            )
+            send_email_notification(mgr.email, mgr_subject, mgr_body)
+            
+    return {"message": f"Escalation notification successfully dispatched to {user.name} and manager."}
 
 if __name__ == "__main__":
     import uvicorn
